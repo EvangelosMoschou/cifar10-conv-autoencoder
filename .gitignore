@@ -1,0 +1,29 @@
+# Virtual environment
+Cifar10/
+venv/
+.venv/
+env/
+.env/
+
+# Datasets
+data/
+Datasets/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Results
+results/models/*.joblib
+results/models/*.pkl
+
+# Report files
+Report/*.log
+Report/*.aux
+Report/*.out
+Report/*.toc
+Report/*.pdf
+
+# OS files
+.DS_Store
