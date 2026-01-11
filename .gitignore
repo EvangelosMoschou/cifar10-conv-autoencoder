@@ -17,13 +17,14 @@ __pycache__/
 # Results
 results/models/*.joblib
 results/models/*.pkl
+results/models/*.h5
+results/models/*.keras
 
 # Report files
 Report/*.log
 Report/*.aux
 Report/*.out
 Report/*.toc
-Report/*.pdf
 
 # OS files
 .DS_Store

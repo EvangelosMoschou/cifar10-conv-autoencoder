@@ -49,7 +49,7 @@ def run_all_experiments():
     
     # AE Features (using ld=128 as representative)
     print("\nExtracting AE features for classification (Latent Dim: 128)...")
-    encoder_128 = tf.keras.models.load_model("models/latent_128/encoder.keras")
+    encoder_128 = tf.keras.models.load_model("results/models/latent_128/encoder.keras")
     x_train_ae, x_test_ae = get_ae_features(encoder_128, x_train, x_test)
     res_ae = evaluate_classification(x_train_ae, y_train, x_test_ae, y_test, name="Autoencoder (128)")
     classification_results.append(res_ae)

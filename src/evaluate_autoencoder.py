@@ -1,54 +1,100 @@
+# evaluate_autoencoder.py - Αξιολόγηση και Σύγκριση Autoencoder
+"""
+Πλήρης αξιολόγηση του εκπαιδευμένου Autoencoder:
+1. Αξιολόγηση ανακατασκευής (MSE, SSIM)
+2. Σύγκριση με PCA
+3. Ταξινόμηση στον Λανθάνοντα Χώρο (KNN, NC, MLP)
+4. Fine-tuning για ταξινόμηση
+"""
+
 import os
 import tensorflow as tf
 from tensorflow import keras
+from tensorflow.keras import layers
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.neighbors import KNeighborsClassifier, NearestCentroid
-from sklearn.metrics import mean_squared_error, accuracy_score
+from sklearn.metrics import mean_squared_error
 import pandas as pd
 
-from data_utils import load_and_preprocess_data, plot_reconstructions, get_class_name
-from models import build_autoencoder
+# GPU Memory Growth
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+    except RuntimeError as e:
+        print(e)
+
+from config import (
+    LATENT_DIM, MASK_RATIO, PATCH_SIZE, 
+    MODELS_DIR, PLOTS_DIR, METRICS_DIR
+)
+from data_utils import load_and_preprocess_data, create_mask, denormalize, plot_reconstructions
+
 
 def evaluate_models():
-    # Create subdirectories if they don't exist
-    for subdir in ['plots', 'metrics']:
-        os.makedirs(os.path.join('results', subdir), exist_ok=True)
+    """
+    Πλήρης αξιολόγηση του εκπαιδευμένου autoencoder.
+    """
+    print("\n" + "="*60)
+    print("  AUTOENCODER EVALUATION")
+    print("="*60 + "\n")
+    
+    # Δημιουργία φακέλων
+    for subdir in [PLOTS_DIR, METRICS_DIR]:
+        os.makedirs(subdir, exist_ok=True)
 
-    # Load Data
+    # Φόρτωση δεδομένων
     (x_train, y_train), (x_test, y_test) = load_and_preprocess_data()
     
-    # Load Models
+    # Φόρτωση μοντέλων
     try:
-        autoencoder = keras.models.load_model('results/models/final_autoencoder.h5', compile=False)
-        encoder = keras.models.load_model('results/models/final_encoder.h5', compile=False)
-        print("Models loaded successfully.")
+        autoencoder = keras.models.load_model(f'{MODELS_DIR}/final_autoencoder.h5', compile=False)
+        encoder = keras.models.load_model(f'{MODELS_DIR}/final_encoder.h5', compile=False)
+        print("✓ Μοντέλα φορτώθηκαν επιτυχώς")
     except Exception as e:
-        print(f"Could not load models. Error: {e}")
-        return
-
-    # 1. Reconstruction Evaluation
-    print("\n--- Reconstruction Evaluation ---")
-    reconstructed_images = autoencoder.predict(x_test)
-    mse = np.mean(np.square(x_test - reconstructed_images))
-    print(f"Autoencoder MSE on Test Set: {mse:.6f}")
+        print(f"✗ Αδυναμία φόρτωσης μοντέλων: {e}")
+        print("  Εκτελέστε πρώτα το train_autoencoder.py")
+        return None
     
-    # Denormalize for plotting: [-1, 1] -> [0, 1]
-    x_test_plot = (x_test + 1) / 2
-    reconstructed_plot = (reconstructed_images + 1) / 2
-    
-    # Plot Reconstructions
-    plot_reconstructions(x_test_plot, reconstructed_plot, title="Autoencoder Reconstructions")
-    plt.savefig('results/plots/reconstructions.png')
-    plt.close()
-
-    # 2. PCA Comparison
-    print("\n--- PCA Comparison ---")
     latent_dim = encoder.output_shape[1]
-    print(f"Fitting PCA with {latent_dim} components...")
+    print(f"  Latent dimension: {latent_dim}")
     
-    # Flatten data for PCA
+    results = {}
+    
+    # ==================== 1. RECONSTRUCTION EVALUATION ====================
+    print("\n--- 1. Αξιολόγηση Ανακατασκευής ---")
+    
+    # Αξιολόγηση χωρίς μάσκα (clean reconstruction)
+    reconstructed_clean = autoencoder.predict(x_test, verbose=0)
+    mse_clean = np.mean(np.square(x_test - reconstructed_clean))
+    print(f"MSE (χωρίς μάσκα): {mse_clean:.6f}")
+    results['AE_MSE_clean'] = mse_clean
+    
+    # Αξιολόγηση με μάσκα (masked reconstruction)
+    mask = create_mask(x_test[:100], patch_size=PATCH_SIZE, mask_ratio=MASK_RATIO)
+    masked_x_test = x_test[:100] * mask.numpy()
+    reconstructed_masked = autoencoder.predict(masked_x_test, verbose=0)
+    mse_masked = np.mean(np.square(x_test[:100] - reconstructed_masked))
+    print(f"MSE (με μάσκα {MASK_RATIO*100:.0f}%): {mse_masked:.6f}")
+    results['AE_MSE_masked'] = mse_masked
+    
+    # Οπτικοποίηση ανακατασκευών
+    fig = plot_reconstructions(
+        denormalize(x_test[:10]), 
+        denormalize(reconstructed_clean[:10]),
+        masked=denormalize(masked_x_test[:10]),
+        title="Ανακατασκευές Autoencoder"
+    )
+    plt.savefig(f'{PLOTS_DIR}/reconstructions.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"  Γράφημα: {PLOTS_DIR}/reconstructions.png")
+    
+    # ==================== 2. PCA COMPARISON ====================
+    print("\n--- 2. Σύγκριση με PCA ---")
+    
     x_train_flat = x_train.reshape((x_train.shape[0], -1))
     x_test_flat = x_test.reshape((x_test.shape[0], -1))
     
@@ -58,82 +104,193 @@ def evaluate_models():
     x_test_pca = pca.transform(x_test_flat)
     x_test_pca_recon = pca.inverse_transform(x_test_pca)
     
-    pca_mse =mean_squared_error(x_test_flat, x_test_pca_recon)
-    print(f"PCA MSE on Test Set: {pca_mse:.6f}")
+    pca_mse = mean_squared_error(x_test_flat, x_test_pca_recon)
+    print(f"PCA MSE (n={latent_dim}): {pca_mse:.6f}")
+    print(f"Explained variance: {pca.explained_variance_ratio_.sum()*100:.1f}%")
+    results['PCA_MSE'] = pca_mse
     
-    # Plot PCA Reconstructions
+    # Σύγκριση
+    improvement = (pca_mse - mse_clean) / pca_mse * 100
+    print(f"\nAutoencoder vs PCA: {improvement:+.1f}% {'καλύτερο' if improvement > 0 else 'χειρότερο'}")
+    
+    # Οπτικοποίηση PCA
     x_test_pca_recon_img = x_test_pca_recon.reshape(x_test.shape)
-    x_test_pca_recon_plot = (x_test_pca_recon_img + 1) / 2
-    
-    plot_reconstructions(x_test_plot, x_test_pca_recon_plot, title=f"PCA Reconstructions (n={latent_dim})")
-    plt.savefig('results/plots/pca_comparison.png')
+    fig = plot_reconstructions(
+        denormalize(x_test[:10]), 
+        denormalize(x_test_pca_recon_img[:10]),
+        title=f"Ανακατασκευές PCA (n={latent_dim})"
+    )
+    plt.savefig(f'{PLOTS_DIR}/pca_comparison.png', dpi=150, bbox_inches='tight')
     plt.close()
-
-    # 3. Latent Space Classification
-    print("\n--- Latent Space Classification ---")
+    print(f"  Γράφημα: {PLOTS_DIR}/pca_comparison.png")
     
-    # Get Latent Representations
-    z_train = encoder.predict(x_train)
-    z_test = encoder.predict(x_test)
+    # ==================== 3. CLASSIFICATION ====================
+    print("\n--- 3. Ταξινόμηση στον Λανθάνοντα Χώρο ---")
+    
+    # Extract latent representations
+    z_train = encoder.predict(x_train, verbose=0)
+    z_test = encoder.predict(x_test, verbose=0)
     
     # K-Nearest Neighbors
-    knn = KNeighborsClassifier(n_neighbors=5)
+    knn = KNeighborsClassifier(n_neighbors=5, n_jobs=-1)
     knn.fit(z_train, y_train)
     knn_acc = knn.score(z_test, y_test)
-    print(f"KNN Accuracy on Latent Space: {knn_acc:.4f}")
+    print(f"KNN (k=5): {knn_acc*100:.2f}%")
+    results['KNN_Accuracy'] = knn_acc
     
     # Nearest Centroid
     nc = NearestCentroid()
     nc.fit(z_train, y_train)
     nc_acc = nc.score(z_test, y_test)
-    print(f"Nearest Centroid Accuracy on Latent Space: {nc_acc:.4f}")
+    print(f"Nearest Centroid: {nc_acc*100:.2f}%")
+    results['NC_Accuracy'] = nc_acc
     
-    # Neural Network Classifier
-    print("Training Neural Network on Latent Space...")
+    # Neural Network Classifier (frozen encoder)
+    print("\nΕκπαίδευση NN ταξινομητή (frozen encoder)...")
     classifier = keras.Sequential([
-        keras.layers.Input(shape=(latent_dim,)),
-        keras.layers.Dense(256, activation='relu'),
-        keras.layers.Dropout(0.5),
-        keras.layers.Dense(10, activation='softmax')
+        layers.Input(shape=(latent_dim,)),
+        layers.Dense(512, activation='relu'),
+        layers.BatchNormalization(),
+        layers.Dropout(0.4),
+        layers.Dense(256, activation='relu'),
+        layers.BatchNormalization(),
+        layers.Dropout(0.3),
+        layers.Dense(10, activation='softmax')
     ])
     
-    classifier.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
-    clf_history = classifier.fit(z_train, y_train, epochs=20, batch_size=128, validation_data=(z_test, y_test), verbose=0)
+    classifier.compile(
+        optimizer=keras.optimizers.Adam(1e-3),
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy']
+    )
     
-    nn_loss, nn_acc = classifier.evaluate(z_test, y_test, verbose=0)
-    print(f"Neural Network Accuracy on Latent Space: {nn_acc:.4f}")
+    classifier_history = classifier.fit(
+        z_train, y_train,
+        epochs=30,
+        batch_size=128,
+        validation_data=(z_test, y_test),
+        callbacks=[
+            keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True),
+            keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=3)
+        ],
+        verbose=0
+    )
     
-    # Plot Classifier Accuracy
+    _, nn_acc = classifier.evaluate(z_test, y_test, verbose=0)
+    print(f"NN Classifier (frozen): {nn_acc*100:.2f}%")
+    results['NN_Accuracy'] = nn_acc
+    
+    # Plot Frozen Classifier History
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
-    plt.plot(clf_history.history['accuracy'], label='Train Accuracy')
-    plt.plot(clf_history.history['val_accuracy'], label='Val Accuracy')
-    plt.title('Classifier Accuracy')
+    plt.plot(classifier_history.history['accuracy'], label='Train')
+    plt.plot(classifier_history.history['val_accuracy'], label='Validation')
+    plt.title('Frozen Classifier Accuracy')
     plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
     plt.legend()
     
     plt.subplot(1, 2, 2)
-    plt.plot(clf_history.history['loss'], label='Train Loss')
-    plt.plot(clf_history.history['val_loss'], label='Val Loss')
-    plt.title('Classifier Loss')
+    plt.plot(classifier_history.history['loss'], label='Train')
+    plt.plot(classifier_history.history['val_loss'], label='Validation')
+    plt.title('Frozen Classifier Loss')
     plt.xlabel('Epoch')
+    plt.ylabel('Loss')
     plt.legend()
     
     plt.tight_layout()
-    plt.savefig('results/plots/classifier_history.png')
+    plt.savefig(f'{PLOTS_DIR}/frozen_classifier_history.png', dpi=150)
     plt.close()
-    print("Classifier history plot saved to results/plots/classifier_history.png")
+    results['NN_Accuracy'] = nn_acc
     
-    # Save Metrics
-    results = {
-        'Autoencoder_MSE': mse,
-        'PCA_MSE': pca_mse,
-        'KNN_Accuracy': knn_acc,
-        'NC_Accuracy': nc_acc,
-        'NN_Accuracy': nn_acc
-    }
-    pd.DataFrame([results]).to_csv('results/metrics/evaluation_metrics.csv', index=False)
-    print("Evaluation Complete. Metrics saved to results/metrics/evaluation_metrics.csv")
+    # ==================== 4. FINE-TUNING ====================
+    print("\n--- 4. Fine-tuning End-to-End ---")
+    
+    encoder.trainable = True
+    
+    inputs = layers.Input(shape=(32, 32, 3))
+    
+    # Data augmentation
+    x = layers.RandomFlip("horizontal")(inputs)
+    x = layers.RandomContrast(0.1)(x)
+    
+    # Encode
+    encoded = encoder(x)
+    
+    # Classifier head with regularization
+    l2_reg = keras.regularizers.l2(1e-4)
+    x = layers.Dense(512, activation='relu', kernel_regularizer=l2_reg)(encoded)
+    x = layers.BatchNormalization()(x)
+    x = layers.Dropout(0.5)(x)
+    x = layers.Dense(256, activation='relu', kernel_regularizer=l2_reg)(x)
+    x = layers.BatchNormalization()(x)
+    x = layers.Dropout(0.4)(x)
+    outputs = layers.Dense(10, activation='softmax')(x)
+    
+    finetuned_model = keras.Model(inputs, outputs)
+    
+    finetuned_model.compile(
+        optimizer=keras.optimizers.Adam(1e-5, clipnorm=1.0),  # Much lower LR and clipping
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy']
+    )
+    
+    history = finetuned_model.fit(
+        x_train, y_train,
+        epochs=20,
+        batch_size=128,
+        validation_data=(x_test, y_test),
+        callbacks=[
+            keras.callbacks.EarlyStopping(patience=5, restore_best_weights=True),
+            keras.callbacks.ReduceLROnPlateau(factor=0.5, patience=3)
+        ],
+        verbose=1
+    )
+    
+    _, ft_acc = finetuned_model.evaluate(x_test, y_test, verbose=0)
+    print(f"Fine-tuned Accuracy: {ft_acc*100:.2f}%")
+    results['FineTuned_Accuracy'] = ft_acc
+    
+    # Plot fine-tuning history
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history['accuracy'], label='Train')
+    plt.plot(history.history['val_accuracy'], label='Validation')
+    plt.title('Fine-tuning Accuracy')
+    plt.xlabel('Epoch')
+    plt.ylabel('Accuracy')
+    plt.legend()
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history['loss'], label='Train')
+    plt.plot(history.history['val_loss'], label='Validation')
+    plt.title('Fine-tuning Loss')
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.legend()
+    
+    plt.tight_layout()
+    plt.savefig(f'{PLOTS_DIR}/finetuning_history.png', dpi=150)
+    plt.close()
+    
+    # ==================== SAVE RESULTS ====================
+    print("\n--- Αποτελέσματα ---")
+    print("="*40)
+    print(f"{'Μέθοδος':<25} {'Τιμή':>10}")
+    print("-"*40)
+    for key, value in results.items():
+        if 'Accuracy' in key:
+            print(f"{key:<25} {value*100:>9.2f}%")
+        else:
+            print(f"{key:<25} {value:>10.6f}")
+    print("="*40)
+    
+    # Save to CSV
+    pd.DataFrame([results]).to_csv(f'{METRICS_DIR}/evaluation_metrics.csv', index=False)
+    print(f"\nΜετρικές αποθηκεύτηκαν στο {METRICS_DIR}/evaluation_metrics.csv")
+    
+    return results
+
 
 if __name__ == "__main__":
     evaluate_models()
