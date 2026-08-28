@@ -1,3 +1,16 @@
+# Convolutional Autoencoder for CIFAR-10
+
+> English summary — the full write-up follows in Greek.
+
+Course project for **Neural Networks & Deep Learning** (Aristotle University of
+Thessaloniki, January 2026): a convolutional autoencoder with a **ResNet-style
+architecture** and **masked learning** for CIFAR-10 reconstruction — residual
+connections, batch normalization, and a joint **MSE + SSIM** loss for higher
+reconstruction quality. Training runs are reproducible end to end via
+`run_all.py`; the full report is under `Report/`.
+
+---
+
 # Συνελικτικός Αυτοκωδικοποιητής για CIFAR-10
 
 **3η Υποχρεωτική Εργασία** - Νευρωνικά Δίκτυα & Βαθιά Μάθηση  
